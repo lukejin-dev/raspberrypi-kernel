@@ -3,6 +3,7 @@
  *
  * Copyright (C)  2009   Alexander Gordeev <lasaine@lvk.cs.msu.su>
  *                2018   Juan Solano <jsm@jsolano.com>
+ * 				  2020	 Ken Lu <bluewish.ken.lu@gmail.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,7 +27,9 @@
 #include <linux/version.h>
 
 #define DRVDESC "GPIO PPS signal generator"
-MODULE_AUTHOR("Juan Solano <jsm@jsolano.com>");
+#define DRVNAME "pps_gen_gpio"
+
+MODULE_AUTHOR("Ken Lu <bluewish.ken.lu@gmail.com>");
 MODULE_DESCRIPTION(DRVDESC);
 MODULE_LICENSE("GPL");
 
@@ -100,13 +103,24 @@ static enum hrtimer_restart hrtimer_callback(struct hrtimer *timer)
 	/* Get current timestamp and requested time to check if we are late. */
 	GETNSTIMEOFDAY(&ts_expire_real);
 	ts_expire_req = KTIME_TO_TIMESPEC(hrtimer_get_softexpires(timer));
-	if (ts_expire_req.tv_sec != ts_expire_real.tv_sec
-	    || ts_expire_real.tv_nsec > time_gpio_assert_ns) {
+	if (ts_expire_real.tv_sec > ts_expire_req.tv_sec) {
+		/* At begining of bootime, the time might not correct. */
+		hrtimer_set_expires(timer,
+			    ktime_set(ts_expire_real.tv_sec + 1,
+				      time_gpio_assert_ns
+				      - hrtimer_avg_latency
+				      - SAFETY_INTERVAL_NS));
+		return HRTIMER_RESTART;
+	} else if (ts_expire_req.tv_sec != ts_expire_real.tv_sec || \
+			   ts_expire_real.tv_nsec > time_gpio_assert_ns) {
 		local_irq_restore(irq_flags);
-		pr_err("We are late this time [%ld.%09ld]\n",
-		       ts_expire_real.tv_sec, ts_expire_real.tv_nsec);
+		pr_err(DRVNAME "We are late this time req:[%lld.%09ld] real:[%lld.%09ld]\n",
+		        ts_expire_req.tv_sec, ts_expire_req.tv_nsec
+				ts_expire_real.tv_sec, ts_expire_real.tv_nsec);
 		goto done;
 	}
+
+	pr_info(DRVNAME " - GPIO event ...\n");
 
 	/* Busy loop until the time is right for a GPIO assert. */
 	do
@@ -182,7 +196,7 @@ static void pps_gen_calibrate(struct pps_gen_gpio_devdata *devdata)
 	}
 
 	devdata->gpio_instr_time = time_acc / PPS_GEN_CALIBRATE_LOOPS;
-	pr_info("PPS GPIO set takes %ldns\n", devdata->gpio_instr_time);
+	pr_info(DRVNAME " PPS GPIO set takes %ldns\n", devdata->gpio_instr_time);
 }
 
 static ktime_t pps_gen_first_timer_event(struct pps_gen_gpio_devdata *devdata)
@@ -204,6 +218,8 @@ static int pps_gen_gpio_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct pps_gen_gpio_devdata *devdata;
 
+	pr_info(DRVNAME "probe \n");
+
 	/* Allocate space for device info. */
 	devdata = devm_kzalloc(dev,
 			       sizeof(struct pps_gen_gpio_devdata),
@@ -214,7 +230,7 @@ static int pps_gen_gpio_probe(struct platform_device *pdev)
 	}
 
 	/* There should be a single PPS generator GPIO pin defined in DT. */
-	if (of_gpio_named_count(dev->of_node, "pps-gen-gpio") != 1) {
+	if (of_gpio_named_count(dev->of_node, "pps-gen-gpios") != 1) {
 		dev_err(dev, "There should be exactly one pps-gen GPIO defined in DT\n");
 		ret = -EINVAL;
 		goto err_dt;
@@ -271,7 +287,7 @@ MODULE_DEVICE_TABLE(of, pps_gen_gpio_dt_ids);
 
 static struct platform_driver pps_gen_gpio_driver = {
 	.driver			= {
-		.name		= "pps_gen_gpio",
+		.name		= DRVNAME,
 		.owner		= THIS_MODULE,
 		.of_match_table = of_match_ptr(pps_gen_gpio_dt_ids),
 	},
@@ -281,9 +297,8 @@ static struct platform_driver pps_gen_gpio_driver = {
 
 static int __init pps_gen_gpio_init(void)
 {
-	pr_info(DRVDESC "\n");
 	if (gpio_pulse_width_ns > GPIO_PULSE_WIDTH_MAX_NS) {
-		pr_err("pps_gen_gpio: width value should be not greater than %ldns\n",
+		pr_err(DRVNAME "width value should be not greater than %ldns\n",
 		       GPIO_PULSE_WIDTH_MAX_NS);
 		return -EINVAL;
 	}
@@ -293,7 +308,7 @@ static int __init pps_gen_gpio_init(void)
 
 static void __exit pps_gen_gpio_exit(void)
 {
-	pr_info("pps_gen_gpio: hrtimer average latency is %ldns\n",
+	pr_info(DRVNAME "hrtimer average latency is %ldns\n",
 		hrtimer_avg_latency);
 	platform_driver_unregister(&pps_gen_gpio_driver);
 }
