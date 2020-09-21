@@ -115,7 +115,7 @@ static enum hrtimer_restart hrtimer_callback(struct hrtimer *timer)
 			   ts_expire_real.tv_nsec > time_gpio_assert_ns) {
 		local_irq_restore(irq_flags);
 		pr_err(DRVNAME "We are late this time req:[%lld.%09ld] real:[%lld.%09ld]\n",
-		        ts_expire_req.tv_sec, ts_expire_req.tv_nsec
+		        ts_expire_req.tv_sec, ts_expire_req.tv_nsec,
 				ts_expire_real.tv_sec, ts_expire_real.tv_nsec);
 		goto done;
 	}
